@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Metanol Dedektörü İzleme</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+  <style>
+    :root { color-scheme: light dark; --bg:#0f1115; --card:#1a1d24; --fg:#e6e8ec; --muted:#8b90a0; --line:#2a2e38; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px system-ui,sans-serif; background:var(--bg); color:var(--fg); padding:16px; }
+    h1 { font-size:18px; margin:0 0 4px; }
+    .sub { color:var(--muted); font-size:12px; margin-bottom:16px; }
+    .grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+    .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.5px; }
+    .big { font-size:40px; font-weight:700; margin:8px 0; }
+    .unit { font-size:16px; color:var(--muted); }
+    .pill { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+    .ok { background:#123d1e; color:#4ade80; }
+    .warn { background:#3d3512; color:#fbbf24; }
+    .bad { background:#3d1212; color:#f87171; }
+    .muted { color:var(--muted); }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; }
+    .chartwrap { height:260px; }
+    .note { margin-top:20px; font-size:11px; color:var(--muted); border-top:1px solid var(--line); padding-top:12px; }
+  </style>
+</head>
+<body>
+  <h1>Metanol Gaz Dedektörü — Uzaktan İzleme</h1>
+  <div class="sub">İkincil izleme katmanı · GDSFX / Modbus RTU over TCP</div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Konsantrasyon</div>
+      <div class="big"><span id="conc">–</span> <span class="unit">%LEL</span></div>
+      <div id="gasPill" class="pill muted">bekleniyor</div>
+    </div>
+    <div class="card">
+      <div class="label">Bağlantı</div>
+      <div class="big" style="font-size:22px;"><span id="connPill" class="pill muted">bekleniyor</span></div>
+      <div class="muted" id="lastData">son veri: –</div>
+      <div class="muted" id="remote"></div>
+    </div>
+    <div class="card">
+      <div class="label">Modbus Sağlık</div>
+      <div class="muted">Ardışık timeout: <span id="timeouts">–</span></div>
+      <div class="muted">CRC hataları: <span id="crc">–</span></div>
+      <div class="muted">Status (ham): <span id="statusRaw">–</span></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <div class="label">Son 24 Saat</div>
+    <div class="chartwrap"><canvas id="chart"></canvas></div>
+  </div>
+
+  <div class="grid" style="margin-top:16px;">
+    <div class="card">
+      <div class="label">Aktif Alarmlar</div>
+      <div id="activeAlarms"><span class="muted">yok</span></div>
+    </div>
+    <div class="card">
+      <div class="label">Alarm Geçmişi</div>
+      <table><thead><tr><th>Zaman</th><th>Tip</th><th>Durum</th><th>Değer</th></tr></thead>
+        <tbody id="alarmHistory"></tbody></table>
+    </div>
+  </div>
+
+  <div class="note">
+    Bu yazılım ikincil izleme katmanıdır. Sahadaki birincil emniyet fonksiyonu
+    (siren/havalandırma) dedektörün lokal röle çıkışlarındadır ve bu sistemden bağımsızdır.
+  </div>
+
+  <script>
+    let chart;
+    const fmtTime = (ts) => ts ? new Date(ts).toLocaleString('tr-TR') : '–';
+
+    function gasClass(c, th) {
+      if (c == null) return ['muted','veri yok'];
+      if (c >= th.high) return ['bad','YÜKSEK ALARM'];
+      if (c >= th.low) return ['warn','ön alarm'];
+      return ['ok','normal'];
+    }
+
+    async function refresh() {
+      try {
+        const s = await (await fetch('/api/status')).json();
+        document.getElementById('conc').textContent = s.concentration != null ? s.concentration.toFixed(1) : '–';
+        const [gc, gt] = gasClass(s.concentration, s.thresholds);
+        const gp = document.getElementById('gasPill'); gp.className = 'pill ' + gc; gp.textContent = gt;
+
+        const cp = document.getElementById('connPill');
+        if (s.connected && !s.dataStale) { cp.className='pill ok'; cp.textContent='bağlı'; }
+        else if (s.connected) { cp.className='pill warn'; cp.textContent='veri eski'; }
+        else { cp.className='pill bad'; cp.textContent='bağlı değil'; }
+
+        document.getElementById('lastData').textContent = 'son veri: ' + fmtTime(s.lastReadingTs);
+        document.getElementById('remote').textContent = s.remoteAddress ? ('kaynak: ' + s.remoteAddress) : '';
+        document.getElementById('timeouts').textContent = s.consecutiveTimeouts;
+        document.getElementById('crc').textContent = s.crcErrors;
+        document.getElementById('statusRaw').textContent = s.statusRaw != null ? ('0x' + s.statusRaw.toString(16)) : '–';
+
+        const aa = document.getElementById('activeAlarms');
+        aa.innerHTML = s.activeAlarms.length
+          ? s.activeAlarms.map(a => `<div class="pill bad" style="margin:2px;">${a.type} (${fmtTime(a.since)})</div>`).join('')
+          : '<span class="muted">yok</span>';
+      } catch (e) { /* geçici hata */ }
+    }
+
+    async function refreshHistory() {
+      try {
+        const rows = await (await fetch('/api/alarms?limit=20')).json();
+        document.getElementById('alarmHistory').innerHTML = rows.map(r =>
+          `<tr><td>${fmtTime(r.ts)}</td><td>${r.type}</td><td>${r.state}</td><td>${r.value ?? ''}</td></tr>`
+        ).join('');
+
+        const data = await (await fetch('/api/readings')).json();
+        const pts = data.map(d => ({ x: d.ts, y: d.concentration }));
+        if (!chart) {
+          chart = new Chart(document.getElementById('chart'), {
+            type: 'line',
+            data: { datasets: [{ label:'%LEL', data: pts, borderColor:'#60a5fa', pointRadius:0, tension:.2 }] },
+            options: { animation:false, parsing:false, scales:{ x:{ type:'time', time:{ unit:'hour' } }, y:{ beginAtZero:true } }, plugins:{ legend:{ display:false } } }
+          });
+        } else { chart.data.datasets[0].data = pts; chart.update('none'); }
+      } catch (e) { /* geçici hata */ }
+    }
+
+    refresh(); refreshHistory();
+    setInterval(refresh, 5000);
+    setInterval(refreshHistory, 30000);
+  </script>
+</body>
+</html>
