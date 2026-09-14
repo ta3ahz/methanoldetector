@@ -13,6 +13,17 @@ console.log(`Slave ID: ${config.slaveId} | Poll: ${config.pollIntervalMs}ms`);
 console.log('UYARI: Bu sistem ikincil izleme katmanıdır. Birincil emniyet');
 console.log('fonksiyonu dedektörün lokal röle çıkışlarındadır.');
 
+// HTTP ve TCP aynı porta bağlanamaz. Railway'de genellikle PORT ile PORT_TCP
+// yanlışlıkla aynı değere set edilince olur.
+if (config.httpPort === config.tcpPort) {
+  console.error(
+    `[fatal] HTTP portu (PORT=${config.httpPort}) ile Modbus TCP portu ` +
+      `(PORT_TCP=${config.tcpPort}) AYNI olamaz. Railway Variables'ta PORT ile ` +
+      `PORT_TCP farklı olmalı (örn. PORT=8080, PORT_TCP=5020).`
+  );
+  process.exit(1);
+}
+
 const notifier = buildNotifier();
 console.log(`Bildirim kanalları: ${notifier.channels.join(', ')}`);
 alarms.setNotifier(notifier);
