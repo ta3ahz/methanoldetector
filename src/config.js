@@ -16,9 +16,13 @@ function str(name, def) {
 }
 
 const config = {
-  // HTTP (Railway atar) ve TCP (Modbus) portları
-  httpPort: num('PORT', 3000),
-  tcpPort: num('PORT_TCP', 5020),
+  // Port stratejisi (Railway uyumlu):
+  //   - Railway TCP Proxy, trafiği konteynerin `PORT` değişkenine yönlendirir.
+  //     Bu yüzden Modbus TCP server `PORT`'u kullanır (yoksa PORT_TCP, yoksa 5020).
+  //   - HTTP dashboard ayrı bir `HTTP_PORT` (varsayılan 8080) kullanır; böylece
+  //     Railway `PORT`'u TCP için değiştirse bile iki server çakışmaz.
+  httpPort: num('HTTP_PORT', 8080),
+  tcpPort: num('PORT', num('PORT_TCP', 5020)),
 
   // Modbus
   slaveId: num('MODBUS_SLAVE_ID', 1),

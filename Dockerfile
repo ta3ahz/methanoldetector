@@ -15,7 +15,8 @@ COPY . .
 # Not: SQLite kalıcı depolaması Railway Volumes ile /data'ya mount edilir
 # (Dockerfile VOLUME komutu Railway'de desteklenmez).
 
-# HTTP portu (Railway PORT env ile override eder)
-EXPOSE 3000
+# HTTP dashboard (HTTP_PORT) ve Modbus TCP (PORT) portları
+EXPOSE 8080
+EXPOSE 5020
 
 CMD ["npm", "start"]
