@@ -3,6 +3,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const config = require('./config');
 const state = require('./state');
 const db = require('./db');
@@ -10,22 +11,63 @@ const alarms = require('./alarms');
 
 const DASHBOARD_HTML = path.join(__dirname, '..', 'public', 'index.html');
 
-// HTTP Basic Auth: /health hariç tüm yollar. Parola tanımlı değilse geç.
-function checkAuth(req) {
+// Geçerli oturum token'ları (tek replika; restart'ta sıfırlanır, yeniden giriş gerekir).
+const sessions = new Set();
+
+function parseCookies(req) {
+  const out = {};
+  const h = req.headers.cookie || '';
+  h.split(';').forEach((p) => {
+    const i = p.indexOf('=');
+    if (i > 0) out[p.slice(0, i).trim()] = decodeURIComponent(p.slice(i + 1).trim());
+  });
+  return out;
+}
+
+// Kimlik doğrulama: parola tanımsızsa herkese açık. Aksi halde ya geçerli oturum
+// cookie'si ya da Basic Auth (curl/script için) gerekir.
+function isAuthed(req) {
   if (!config.dashboardPassword) return true;
   const hdr = req.headers.authorization || '';
   const m = hdr.match(/^Basic (.+)$/);
-  if (!m) return false;
-  const decoded = Buffer.from(m[1], 'base64').toString('utf8');
-  const idx = decoded.indexOf(':');
-  const pass = idx >= 0 ? decoded.slice(idx + 1) : decoded;
-  return pass === config.dashboardPassword;
+  if (m) {
+    const dec = Buffer.from(m[1], 'base64').toString('utf8');
+    const pass = dec.slice(dec.indexOf(':') + 1);
+    if (pass === config.dashboardPassword) return true;
+  }
+  const c = parseCookies(req);
+  if (c.session && sessions.has(c.session)) return true;
+  return false;
 }
 
 function json(res, code, obj) {
-  const body = JSON.stringify(obj);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(body);
+  res.end(JSON.stringify(obj));
+}
+
+function loginPage(errorMsg) {
+  return `<!doctype html><html lang="tr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Giriş — Metanol Dedektörü</title>
+<style>
+  body{margin:0;font:15px system-ui,sans-serif;background:#0f1115;color:#e6e8ec;
+    display:flex;min-height:100vh;align-items:center;justify-content:center}
+  form{background:#1a1d24;border:1px solid #2a2e38;border-radius:12px;padding:28px;width:300px}
+  h1{font-size:16px;margin:0 0 4px}
+  p{color:#8b90a0;font-size:12px;margin:0 0 18px}
+  input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #2a2e38;
+    background:#0f1115;color:#e6e8ec;font-size:14px;margin-bottom:12px}
+  button{width:100%;padding:10px;border:0;border-radius:8px;background:#2563eb;color:#fff;
+    font-size:14px;font-weight:600;cursor:pointer}
+  .err{color:#f87171;font-size:12px;margin-bottom:12px}
+</style></head><body>
+<form method="POST" action="/login">
+  <h1>Metanol Dedektörü İzleme</h1>
+  <p>Devam etmek için parolayı girin.</p>
+  ${errorMsg ? `<div class="err">${errorMsg}</div>` : ''}
+  <input type="password" name="password" placeholder="Parola" autofocus autocomplete="current-password">
+  <button type="submit">Giriş</button>
+</form></body></html>`;
 }
 
 function statusPayload() {
@@ -48,6 +90,39 @@ function statusPayload() {
   };
 }
 
+function handleLogin(req, res) {
+  if (req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => {
+      body += c;
+      if (body.length > 4096) req.destroy();
+    });
+    req.on('end', () => {
+      const params = new URLSearchParams(body);
+      if (params.get('password') === config.dashboardPassword) {
+        const token = crypto.randomBytes(24).toString('hex');
+        sessions.add(token);
+        res.writeHead(302, {
+          'Set-Cookie': `session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800`,
+          Location: '/',
+        });
+        res.end();
+      } else {
+        res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(loginPage('Hatalı parola'));
+      }
+    });
+    return;
+  }
+  // GET: parola yoksa doğrudan ana sayfaya
+  if (!config.dashboardPassword) {
+    res.writeHead(302, { Location: '/' });
+    return res.end();
+  }
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(loginPage());
+}
+
 function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathName = url.pathname;
@@ -57,13 +132,19 @@ function handle(req, res) {
     return json(res, 200, { ok: true, connected: state.connected });
   }
 
-  // Auth
-  if (!checkAuth(req)) {
-    res.writeHead(401, {
-      'WWW-Authenticate': 'Basic realm="Methanol Monitor"',
-      'Content-Type': 'text/plain; charset=utf-8',
-    });
-    return res.end('Yetkilendirme gerekli');
+  // Giriş sayfası — auth'suz
+  if (pathName === '/login') {
+    return handleLogin(req, res);
+  }
+
+  // Buradan sonrası auth ister
+  if (!isAuthed(req)) {
+    // Sayfa isteğinde giriş ekranına yönlendir; API isteğinde 401 dön
+    if (pathName.startsWith('/api')) {
+      return json(res, 401, { error: 'unauthorized' });
+    }
+    res.writeHead(302, { Location: '/login' });
+    return res.end();
   }
 
   if (pathName === '/api/status') {
