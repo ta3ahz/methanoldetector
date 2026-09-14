@@ -95,12 +95,16 @@ function attachSocket(socket) {
   state.consecutiveTimeouts = 0;
 
   // Basit kimlik doğrulama: grace süresi içinde geçerli cevap gelmezse kapat.
-  const authTimer = setTimeout(() => {
-    if (state.lastReadingTs == null || state.lastReadingTs < state.connectedSince) {
-      logEvent('DISCONNECT', `kimlik doğrulama başarısız (${config.authGraceMs}ms içinde geçerli cevap yok)`);
-      socket.destroy();
-    }
-  }, config.authGraceMs);
+  // AUTH_GRACE_MS <= 0 ise bu kontrol tamamen devre dışıdır (bağlantı koparılmaz).
+  let authTimer = null;
+  if (config.authGraceMs > 0) {
+    authTimer = setTimeout(() => {
+      if (state.lastReadingTs == null || state.lastReadingTs < state.connectedSince) {
+        logEvent('DISCONNECT', `kimlik doğrulama başarısız (${config.authGraceMs}ms içinde geçerli cevap yok)`);
+        socket.destroy();
+      }
+    }, config.authGraceMs);
+  }
 
   socket.on('data', onData);
 

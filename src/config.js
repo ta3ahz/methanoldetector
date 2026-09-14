@@ -47,8 +47,9 @@ const config = {
   // Güvenlik
   dashboardPassword: str('DASHBOARD_PASSWORD', ''),
   allowedSourceIp: str('ALLOWED_SOURCE_IP', ''),
-  // Bilinmeyen kaynaktan gelen bağlantıya geçerli cevap için tanınan süre
-  authGraceMs: num('AUTH_GRACE_MS', 10000),
+  // Bilinmeyen kaynaktan gelen bağlantıya geçerli cevap için tanınan süre.
+  // 0 = devre dışı (bağlantı geçerli cevap gelmese de koparılmaz).
+  authGraceMs: num('AUTH_GRACE_MS', 0),
 
   // Depolama
   dbPath: str('DB_PATH', '/data/monitor.db'),
