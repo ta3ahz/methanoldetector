@@ -12,8 +12,8 @@ RUN npm ci --omit=dev
 
 COPY . .
 
-# SQLite volume mount noktası
-VOLUME ["/data"]
+# Not: SQLite kalıcı depolaması Railway Volumes ile /data'ya mount edilir
+# (Dockerfile VOLUME komutu Railway'de desteklenmez).
 
 # HTTP portu (Railway PORT env ile override eder)
 EXPOSE 3000
