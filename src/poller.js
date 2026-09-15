@@ -63,6 +63,7 @@ function maybeWriteReading(ts, conc, temp, monitorState) {
 async function loadDeviceInfo() {
   try {
     const regs = await readBlock(registers.blocks.device);
+    state.rawDevice = regs; // teşhis için ham
     const d = decodeFieldsForBlock('device', regs);
     state.device.targetGas = d.targetGas || null;
     state.device.fullScale = Number.isFinite(d.fullScale) ? d.fullScale : null;
@@ -86,6 +87,7 @@ async function pollOnce() {
     const measRegs = await readBlock(registers.blocks.meas);
     const outputRegs = await readBlock(registers.blocks.output);
 
+    state.rawMeas = measRegs; // teşhis için ham
     const s = decodeFieldsForBlock('status', statusRegs);
     const m = decodeFieldsForBlock('meas', measRegs);
     const o = decodeFieldsForBlock('output', outputRegs);

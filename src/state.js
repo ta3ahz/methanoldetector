@@ -21,6 +21,10 @@ const state = {
   faultRelay: null, // cihazın arıza rölesi
   statusRaw: null, // geriye dönük: monitorState saklanır
 
+  // Teşhis: son okunan ham register dizileri (word order tanısı için)
+  rawMeas: null,
+  rawDevice: null,
+
   // Statik cihaz bilgisi (bağlantı başında bir kez okunur)
   device: {
     targetGas: null,

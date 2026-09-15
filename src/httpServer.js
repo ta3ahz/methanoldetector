@@ -9,6 +9,7 @@ const state = require('./state');
 const db = require('./db');
 const alarms = require('./alarms');
 const registers = require('../registers');
+const modbus = require('./modbus');
 
 const DASHBOARD_HTML = path.join(__dirname, '..', 'public', 'index.html');
 
@@ -166,6 +167,28 @@ function handle(req, res) {
     const to = Number(url.searchParams.get('to')) || Date.now();
     const from = Number(url.searchParams.get('from')) || to - 24 * 3600 * 1000;
     return json(res, 200, db.getReadings(from, to));
+  }
+
+  // Teşhis: ham register'lar ve 4 float order ile çözümleri (word order tanısı)
+  if (pathName === '/api/raw') {
+    const orders = ['ABCD', 'CDAB', 'BADC', 'DCBA'];
+    const hex = (regs) =>
+      regs ? regs.map((r) => '0x' + (r & 0xffff).toString(16).padStart(4, '0')) : null;
+    const interp = (regs, off) => {
+      if (!regs) return null;
+      const o = {};
+      for (const ord of orders) o[ord] = Number(modbus.decodeFloat32(regs, off, ord).toPrecision(6));
+      return o;
+    };
+    return json(res, 200, {
+      activeOrder: config.floatOrder,
+      rawMeas: hex(state.rawMeas),
+      rawDevice: hex(state.rawDevice),
+      concentration_orders: interp(state.rawMeas, 0),
+      temperature_orders: interp(state.rawMeas, 2),
+      fullScale_orders: interp(state.rawDevice, 4),
+      hint: 'fullScale 100 olmalı; hangi order 100 veriyorsa doğru order odur',
+    });
   }
 
   if (pathName === '/api/alarms') {
