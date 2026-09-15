@@ -37,8 +37,13 @@
   <div class="grid">
     <div class="card">
       <div class="label">Konsantrasyon</div>
-      <div class="big"><span id="conc">–</span> <span class="unit">%LEL</span></div>
+      <div class="big"><span id="conc">–</span> <span class="unit" id="gasUnit">%LEL</span></div>
       <div id="gasPill" class="pill muted">bekleniyor</div>
+    </div>
+    <div class="card">
+      <div class="label">Sensör Sıcaklığı</div>
+      <div class="big"><span id="temp">–</span> <span class="unit" id="tempUnit">°C</span></div>
+      <div class="muted" id="sensorType"></div>
     </div>
     <div class="card">
       <div class="label">Bağlantı</div>
@@ -47,10 +52,16 @@
       <div class="muted" id="remote"></div>
     </div>
     <div class="card">
+      <div class="label">Cihaz Durumu</div>
+      <div class="muted">Mod: <span id="mode">–</span></div>
+      <div class="muted">Uyarı kodu: <span id="warn">–</span> · Hata kodu: <span id="err">–</span></div>
+      <div class="muted">Alarm 1: <span id="al1">–</span> · Alarm 2: <span id="al2">–</span> · Arıza rölesi: <span id="frelay">–</span></div>
+      <div class="muted" id="targetGas"></div>
+    </div>
+    <div class="card">
       <div class="label">Modbus Sağlık</div>
       <div class="muted">Ardışık timeout: <span id="timeouts">–</span></div>
       <div class="muted">CRC hataları: <span id="crc">–</span></div>
-      <div class="muted">Status (ham): <span id="statusRaw">–</span></div>
     </div>
   </div>
 
@@ -90,9 +101,15 @@
     async function refresh() {
       try {
         const s = await (await fetch('/api/status')).json();
+        const dev = s.device || {};
         document.getElementById('conc').textContent = s.concentration != null ? s.concentration.toFixed(1) : '–';
+        document.getElementById('gasUnit').textContent = dev.gasUnit || '%LEL';
         const [gc, gt] = gasClass(s.concentration, s.thresholds);
         const gp = document.getElementById('gasPill'); gp.className = 'pill ' + gc; gp.textContent = gt;
+
+        document.getElementById('temp').textContent = s.temperature != null ? s.temperature.toFixed(1) : '–';
+        document.getElementById('tempUnit').textContent = dev.tempUnit || '°C';
+        document.getElementById('sensorType').textContent = dev.sensorType ? ('sensör: ' + dev.sensorType) : '';
 
         const cp = document.getElementById('connPill');
         if (s.connected && !s.dataStale) { cp.className='pill ok'; cp.textContent='bağlı'; }
@@ -101,9 +118,18 @@
 
         document.getElementById('lastData').textContent = 'son veri: ' + fmtTime(s.lastReadingTs);
         document.getElementById('remote').textContent = s.remoteAddress ? ('kaynak: ' + s.remoteAddress) : '';
+
+        const boolTxt = (v) => v == null ? '–' : (v ? 'AKTİF' : 'kapalı');
+        document.getElementById('mode').textContent = s.monitorStateLabel || '–';
+        document.getElementById('warn').textContent = s.warningCode != null ? s.warningCode : '–';
+        document.getElementById('err').textContent = s.errorCode != null ? s.errorCode : '–';
+        document.getElementById('al1').textContent = boolTxt(s.alarm1Status);
+        document.getElementById('al2').textContent = boolTxt(s.alarm2Status);
+        document.getElementById('frelay').textContent = boolTxt(s.faultRelay);
+        document.getElementById('targetGas').textContent = dev.targetGas ? ('hedef gaz: ' + dev.targetGas + (dev.fullScale ? ' · tam skala: ' + dev.fullScale : '')) : '';
+
         document.getElementById('timeouts').textContent = s.consecutiveTimeouts;
         document.getElementById('crc').textContent = s.crcErrors;
-        document.getElementById('statusRaw').textContent = s.statusRaw != null ? ('0x' + s.statusRaw.toString(16)) : '–';
 
         const aa = document.getElementById('activeAlarms');
         aa.innerHTML = s.activeAlarms.length
@@ -120,14 +146,28 @@
         ).join('');
 
         const data = await (await fetch('/api/readings')).json();
-        const pts = data.map(d => ({ x: d.ts, y: d.concentration }));
+        const gasPts = data.map(d => ({ x: d.ts, y: d.concentration }));
+        const tempPts = data.map(d => ({ x: d.ts, y: d.temperature }));
         if (!chart) {
           chart = new Chart(document.getElementById('chart'), {
             type: 'line',
-            data: { datasets: [{ label:'%LEL', data: pts, borderColor:'#60a5fa', pointRadius:0, tension:.2 }] },
-            options: { animation:false, parsing:false, scales:{ x:{ type:'time', time:{ unit:'hour' } }, y:{ beginAtZero:true } }, plugins:{ legend:{ display:false } } }
+            data: { datasets: [
+              { label:'Gaz', data: gasPts, borderColor:'#60a5fa', pointRadius:0, tension:.2, yAxisID:'y' },
+              { label:'Sıcaklık', data: tempPts, borderColor:'#f59e0b', pointRadius:0, tension:.2, yAxisID:'y1' },
+            ] },
+            options: { animation:false, parsing:false,
+              scales:{
+                x:{ type:'time', time:{ unit:'hour' } },
+                y:{ beginAtZero:true, position:'left', title:{ display:true, text:'Gaz' } },
+                y1:{ position:'right', title:{ display:true, text:'Sıcaklık' }, grid:{ drawOnChartArea:false } },
+              },
+              plugins:{ legend:{ display:true } } }
           });
-        } else { chart.data.datasets[0].data = pts; chart.update('none'); }
+        } else {
+          chart.data.datasets[0].data = gasPts;
+          chart.data.datasets[1].data = tempPts;
+          chart.update('none');
+        }
       } catch (e) { /* geçici hata */ }
     }
 

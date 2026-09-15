@@ -26,8 +26,8 @@ db.pragma('journal_mode = WAL');
 db.exec(`
   CREATE TABLE IF NOT EXISTS readings (
     ts INTEGER NOT NULL,            -- epoch ms
-    concentration REAL,             -- %LEL (ölçekli)
-    status_raw INTEGER              -- status register ham değeri
+    concentration REAL,             -- gaz seviyesi (cihaz birimi)
+    status_raw INTEGER              -- monitorState (cihaz modu)
   );
   CREATE INDEX IF NOT EXISTS idx_readings_ts ON readings(ts);
 
@@ -47,16 +47,25 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 `);
 
+// Migrasyon: eski DB'lerde 'temperature' kolonu yoksa ekle.
+const hasTemp = db
+  .prepare("PRAGMA table_info(readings)")
+  .all()
+  .some((c) => c.name === 'temperature');
+if (!hasTemp) {
+  db.exec('ALTER TABLE readings ADD COLUMN temperature REAL');
+}
+
 const stmts = {
   insReading: db.prepare(
-    'INSERT INTO readings (ts, concentration, status_raw) VALUES (?, ?, ?)'
+    'INSERT INTO readings (ts, concentration, temperature, status_raw) VALUES (?, ?, ?, ?)'
   ),
   insAlarm: db.prepare(
     'INSERT INTO alarms (ts, type, state, value) VALUES (?, ?, ?, ?)'
   ),
   insEvent: db.prepare('INSERT INTO events (ts, kind, detail) VALUES (?, ?, ?)'),
   readingsRange: db.prepare(
-    'SELECT ts, concentration, status_raw FROM readings WHERE ts BETWEEN ? AND ? ORDER BY ts ASC'
+    'SELECT ts, concentration, temperature, status_raw FROM readings WHERE ts BETWEEN ? AND ? ORDER BY ts ASC'
   ),
   recentAlarms: db.prepare(
     'SELECT ts, type, state, value FROM alarms ORDER BY ts DESC LIMIT ?'
@@ -66,8 +75,8 @@ const stmts = {
 
 module.exports = {
   db,
-  insertReading(ts, concentration, statusRaw) {
-    stmts.insReading.run(ts, concentration, statusRaw);
+  insertReading(ts, concentration, temperature, statusRaw) {
+    stmts.insReading.run(ts, concentration, temperature ?? null, statusRaw ?? null);
   },
   insertAlarm(ts, type, state, value) {
     stmts.insAlarm.run(ts, type, state, value ?? null);

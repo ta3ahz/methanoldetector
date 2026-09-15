@@ -83,6 +83,42 @@ function tryExtractFrame(buffer, expectedLen) {
   return { frame: Buffer.from(frame), rest: Buffer.from(rest), crcOk: checkCrc(frame) };
 }
 
+// --- Register dizisinden değer çözücüler ---
+// registers: parseReadResponse().registers (uint16 dizisi, big-endian register'lar)
+
+function decodeUint16(registers, off) {
+  return registers[off];
+}
+
+function decodeInt16(registers, off) {
+  const v = registers[off];
+  return v > 0x7fff ? v - 0x10000 : v;
+}
+
+// IEEE-754 float32, 2 register. highWordFirst=true => ABCD (ilk register üst word).
+// Cihaza göre word sırası değişebilir; commissioning'de env ile ters çevrilebilir.
+function decodeFloat32(registers, off, highWordFirst = true) {
+  const buf = Buffer.alloc(4);
+  const a = registers[off];
+  const b = registers[off + 1];
+  if (highWordFirst) {
+    buf.writeUInt16BE(a & 0xffff, 0);
+    buf.writeUInt16BE(b & 0xffff, 2);
+  } else {
+    buf.writeUInt16BE(b & 0xffff, 0);
+    buf.writeUInt16BE(a & 0xffff, 2);
+  }
+  return buf.readFloatBE(0);
+}
+
+// String: her register 2 bayt (big-endian), byteLen bayt oku, null/boşluk kırp.
+function decodeString(registers, off, byteLen) {
+  const nReg = Math.ceil(byteLen / 2);
+  const buf = Buffer.alloc(nReg * 2);
+  for (let i = 0; i < nReg; i++) buf.writeUInt16BE((registers[off + i] || 0) & 0xffff, i * 2);
+  return buf.subarray(0, byteLen).toString('ascii').replace(/\0+/g, '').trim();
+}
+
 module.exports = {
   crc16,
   appendCrc,
@@ -91,4 +127,8 @@ module.exports = {
   expectedReadResponseLen,
   parseReadResponse,
   tryExtractFrame,
+  decodeUint16,
+  decodeInt16,
+  decodeFloat32,
+  decodeString,
 };

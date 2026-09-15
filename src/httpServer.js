@@ -8,6 +8,7 @@ const config = require('./config');
 const state = require('./state');
 const db = require('./db');
 const alarms = require('./alarms');
+const registers = require('../registers');
 
 const DASHBOARD_HTML = path.join(__dirname, '..', 'public', 'index.html');
 
@@ -81,6 +82,16 @@ function statusPayload() {
     lastReadingTs: state.lastReadingTs,
     dataStale: stale,
     concentration: state.concentration,
+    temperature: state.temperature,
+    monitorState: state.monitorState,
+    monitorStateLabel:
+      state.monitorState == null ? null : registers.monitorStateLabel(state.monitorState),
+    warningCode: state.warningCode,
+    errorCode: state.errorCode,
+    alarm1Status: state.alarm1Status,
+    alarm2Status: state.alarm2Status,
+    faultRelay: state.faultRelay,
+    device: state.device,
     statusRaw: state.statusRaw,
     consecutiveTimeouts: state.consecutiveTimeouts,
     crcErrors: state.crcErrors,

@@ -8,79 +8,127 @@ const alarms = require('./alarms');
 const tcp = require('./tcpServer');
 const registers = require('../registers');
 
-// Değeri ölçekle ve tipe uydur.
-function decode(reg, raw) {
-  let v = raw;
-  if (reg.type === 'int16' && raw > 0x7fff) v = raw - 0x10000;
-  return v * (reg.scale ?? 1);
+// Bir bloğu (bitişik register grubu) oku, register dizisi döndür.
+async function readBlock(block) {
+  const req = modbus.buildReadRequest(config.slaveId, block.fc, block.addr, block.qty);
+  const resp = await tcp.sendRequest(req, modbus.expectedReadResponseLen(block.qty));
+  const p = modbus.parseReadResponse(resp);
+  if (p.exception != null) throw new Error(`exception ${p.exception}`);
+  return p.registers;
 }
 
-let lastWrittenTs = 0;
-let lastWrittenConc = null;
-
-// Okumayı DB'ye yaz: değer değiştiğinde veya min aralık dolduğunda.
-function maybeWriteReading(ts, conc, statusRaw) {
-  const changed = conc !== lastWrittenConc;
-  const stale = ts - lastWrittenTs >= config.readingMinIntervalS * 1000;
-  if (changed || stale) {
-    db.insertReading(ts, conc, statusRaw);
-    lastWrittenTs = ts;
-    lastWrittenConc = conc;
+// Alan tanımını verilen blok register dizisiyle çöz.
+function decodeField(f, regs) {
+  switch (f.type) {
+    case 'u16':
+      return modbus.decodeUint16(regs, f.off);
+    case 'i16':
+      return modbus.decodeInt16(regs, f.off);
+    case 'float':
+      return modbus.decodeFloat32(regs, f.off, config.floatHighWordFirst);
+    case 'bool':
+      return modbus.decodeUint16(regs, f.off) !== 0;
+    case 'str':
+      return modbus.decodeString(regs, f.off, f.bytes);
+    default:
+      return null;
   }
 }
 
-// Tek poll döngüsü: concentration + status oku.
+// Belirli bir blok dizisinden, o bloğa ait tüm alanları çöz.
+function decodeFieldsForBlock(blockName, regs) {
+  const out = {};
+  for (const [name, f] of Object.entries(registers.fields)) {
+    if (f.block === blockName) out[name] = decodeField(f, regs);
+  }
+  return out;
+}
+
+let deviceInfoConn = null; // hangi bağlantı için cihaz bilgisi okundu (connectedSince)
+let lastWrite = { ts: 0, conc: null, temp: null, state: null };
+
+function maybeWriteReading(ts, conc, temp, monitorState) {
+  const changed =
+    conc !== lastWrite.conc ||
+    monitorState !== lastWrite.state ||
+    (temp != null && lastWrite.temp != null && Math.abs(temp - lastWrite.temp) >= 0.5);
+  const stale = ts - lastWrite.ts >= config.readingMinIntervalS * 1000;
+  if (changed || stale) {
+    db.insertReading(ts, conc, temp, monitorState);
+    lastWrite = { ts, conc, temp, state: monitorState };
+  }
+}
+
+// Statik cihaz bilgisini bir kez oku (bağlantı başında). Hata kritik değil.
+async function loadDeviceInfo() {
+  try {
+    const regs = await readBlock(registers.blocks.device);
+    const d = decodeFieldsForBlock('device', regs);
+    state.device.targetGas = d.targetGas || null;
+    state.device.fullScale = Number.isFinite(d.fullScale) ? d.fullScale : null;
+    state.device.gasUnit = d.gasUnit || null;
+    state.device.tempUnit = registers.tempUnitLabel(d.tempUnitCode);
+    state.device.sensorType = registers.sensorTypeLabel(d.sensorType);
+    deviceInfoConn = state.connectedSince;
+  } catch (err) {
+    // sonraki poll'da tekrar denenir
+  }
+}
+
 async function pollOnce() {
   if (!tcp.hasConnection()) {
-    // Bağlantı yoksa Modbus denemesi yapma; alarmları yine değerlendir.
     evaluateAlarms();
     return;
   }
 
-  const concReg = registers.concentration;
-  const statusReg = registers.status;
-
   try {
-    // concentration
-    const req1 = modbus.buildReadRequest(config.slaveId, concReg.fc, concReg.addr, 1);
-    const resp1 = await tcp.sendRequest(req1, modbus.expectedReadResponseLen(1));
-    const p1 = modbus.parseReadResponse(resp1);
-    if (p1.exception != null) throw new Error(`exception ${p1.exception}`);
-    const conc = decode(concReg, p1.registers[0]);
+    const statusRegs = await readBlock(registers.blocks.status);
+    const measRegs = await readBlock(registers.blocks.meas);
+    const outputRegs = await readBlock(registers.blocks.output);
 
-    // status
-    const req2 = modbus.buildReadRequest(config.slaveId, statusReg.fc, statusReg.addr, 1);
-    const resp2 = await tcp.sendRequest(req2, modbus.expectedReadResponseLen(1));
-    const p2 = modbus.parseReadResponse(resp2);
-    if (p2.exception != null) throw new Error(`exception ${p2.exception}`);
-    const statusRaw = p2.registers[0];
+    const s = decodeFieldsForBlock('status', statusRegs);
+    const m = decodeFieldsForBlock('meas', measRegs);
+    const o = decodeFieldsForBlock('output', outputRegs);
 
-    // Başarılı okuma
     const ts = Date.now();
     state.consecutiveTimeouts = 0;
-    state.concentration = conc;
-    state.statusRaw = statusRaw;
+    state.monitorState = s.monitorState;
+    state.warningCode = s.warningCode;
+    state.errorCode = s.errorCode;
+    state.concentration = Number.isFinite(m.concentration) ? m.concentration : null;
+    state.temperature = Number.isFinite(m.temperature) ? m.temperature : null;
+    state.alarm1Status = o.alarm1Status;
+    state.alarm2Status = o.alarm2Status;
+    state.faultRelay = o.faultRelay;
+    state.statusRaw = s.monitorState;
     state.lastReadingTs = ts;
-    maybeWriteReading(ts, conc, statusRaw);
+
+    maybeWriteReading(ts, state.concentration, state.temperature, state.monitorState);
+
+    if (deviceInfoConn !== state.connectedSince) await loadDeviceInfo();
   } catch (err) {
     if (err.message === 'timeout' || err.message === 'no-socket') {
       state.consecutiveTimeouts++;
     }
-    // 'crc' ve 'busy' hataları timeout sayılmaz; yalnızca loglanır (crc DB'de).
+    // 'crc'/'busy' timeout sayılmaz
   }
 
   evaluateAlarms();
 }
 
-// Tüm alarm koşullarını topla ve durum makinesine ver.
+// Alarm koşullarını topla ve durum makinesine ver.
 function evaluateAlarms() {
   const now = Date.now();
   const conc = state.concentration;
-  const statusRaw = state.statusRaw;
-  const faultMask = registers.statusBits?.faultMask ?? 0;
 
   const dataStale =
     state.lastReadingTs == null || now - state.lastReadingTs > config.dataStaleS * 1000;
+
+  // Cihaz kaynaklı arıza: HATA modu VEYA hata kodu VEYA arıza rölesi.
+  const deviceFault =
+    state.monitorState === registers.MONITOR_STATE_FAULT ||
+    (state.errorCode != null && state.errorCode !== 0) ||
+    state.faultRelay === true;
 
   const conditions = {
     GAS_HIGH: {
@@ -92,8 +140,8 @@ function evaluateAlarms() {
       value: conc,
     },
     SENSOR_FAULT: {
-      active: statusRaw != null && (statusRaw & faultMask) !== 0 && !dataStale,
-      value: statusRaw,
+      active: deviceFault && !dataStale,
+      value: state.errorCode ?? state.monitorState,
     },
     COMM_LOSS: {
       active: state.consecutiveTimeouts >= config.commLossThreshold,
@@ -112,12 +160,10 @@ let pollTimer = null;
 let pruneTimer = null;
 
 function start() {
-  // İlk poll'u hemen değil, kısa gecikmeyle başlat
   pollTimer = setInterval(() => {
     pollOnce().catch((e) => console.error('[poll] beklenmeyen hata:', e.message));
   }, config.pollIntervalMs);
 
-  // Günlük eski kayıt temizliği
   pruneTimer = setInterval(() => {
     const n = db.pruneOldReadings();
     if (n) console.log(`[db] ${n} eski reading kaydı silindi`);

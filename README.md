@@ -55,20 +55,27 @@ npm test    # CRC16 vektörleri + frame parser (kısmi paket, bitişik çerçeve
 
 ## Modbus register haritası
 
-> ⚠️ **DİKKAT:** `registers.js` içindeki adresler **PLACEHOLDER**'dır. Gerçek
-> GDSFX register haritası Karf&Scoot'tan gelince **yalnızca `registers.js`**
-> güncellenecek; kodun geri kalanı değişmez.
+Harita GDSFX kullanım kılavuzu Bölüm 8'den alınmıştır ([registers.js](registers.js)).
+Tüm okumalar Holding Register (FC03). Ölçümler **IEEE-754 float (2 register)**.
 
-```js
-// registers.js
-module.exports = {
-  concentration: { addr: 0x0000, fc: 3, type: 'uint16', scale: 0.1, unit: '%LEL' },
-  status:        { addr: 0x0002, fc: 3, type: 'uint16' },
-  statusBits:    { faultMask: 0x0001 },  // fault biti
-};
-```
+**Cihaz varsayılanları:** ID `1`, **Baud `115200`**, Parite **Yok**. Router bu
+ayarlarla eşleşmeli.
 
-Ayrıca sahada **baudrate/parity** ayarının dedektör menüsü ile router'da eşit olması gerekir.
+Okunan anlamlı veriler:
+
+| Alan | Adres | Format |
+|---|---|---|
+| Gaz seviyesi (konsantrasyon) | `0x0028` | float |
+| Sensör sıcaklığı | `0x002A` | float |
+| Cihaz modu (BAŞLAT/ISINMA/DÖNGÜ/HATA/KALİBRASYON) | `0x001E` | u16 |
+| Uyarı kodu / Hata kodu | `0x001F` / `0x0020` | u16 |
+| Alarm 1 / Alarm 2 durumu | `0x0047` / `0x004B` | bool |
+| Arıza rölesi durumu | `0x004E` | bool |
+| Hedef gaz / Tam skala / Birim / Sensör tipi | `0x0032`.. | statik (bir kez) |
+
+`scale` yerine değerler cihazdan doğrudan mühendislik biriminde (float) gelir.
+float **word sırası** cihaza göre değişebilir; değerler saçma gelirse
+`MODBUS_FLOAT_WORD_ORDER=LE` deneyin.
 
 ## Alarmlar
 
@@ -76,7 +83,7 @@ Ayrıca sahada **baudrate/parity** ayarının dedektör menüsü ile router'da e
 |---|---|
 | `GAS_HIGH` | konsantrasyon ≥ `ALARM_HIGH_LEL` (varsayılan 20 %LEL) |
 | `GAS_LOW` | konsantrasyon ≥ `ALARM_LOW_LEL` (varsayılan 10 %LEL) — ön alarm |
-| `SENSOR_FAULT` | status register fault biti (katalitik sensör zehirlenmesi kritik) |
+| `SENSOR_FAULT` | cihaz HATA modu (0x001E=3) **veya** hata kodu≠0 **veya** arıza rölesi aktif |
 | `COMM_LOSS` | 3 ardışık Modbus timeout |
 | `LINK_DOWN` | TCP bağlantısı yok **veya** son veri > `DATA_STALE_S` |
 
