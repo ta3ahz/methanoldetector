@@ -25,7 +25,7 @@ function decodeField(f, regs) {
     case 'i16':
       return modbus.decodeInt16(regs, f.off);
     case 'float':
-      return modbus.decodeFloat32(regs, f.off, config.floatHighWordFirst);
+      return modbus.decodeFloat32(regs, f.off, config.floatOrder);
     case 'bool':
       return modbus.decodeUint16(regs, f.off) !== 0;
     case 'str':

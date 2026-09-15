@@ -20,9 +20,13 @@ function opt(name, def) {
 const HOST = opt('host', '127.0.0.1');
 const PORT = Number(opt('port', process.env.PORT_TCP || 5020));
 const SLAVE = Number(opt('slave', process.env.MODBUS_SLAVE_ID || 1));
-const HIGH_WORD_FIRST = String(opt('word', 'BE')).toUpperCase() !== 'LE';
+const FLOAT_ORDERS = { ABCD: [0, 1, 2, 3], CDAB: [2, 3, 0, 1], BADC: [1, 0, 3, 2], DCBA: [3, 2, 1, 0] };
+let ORDER = String(opt('word', 'BE')).toUpperCase();
+if (ORDER === 'BE') ORDER = 'ABCD';
+if (ORDER === 'LE') ORDER = 'CDAB';
+if (!FLOAT_ORDERS[ORDER]) ORDER = 'ABCD';
 
-console.log(`[sim] senaryo=${scenario} -> ${HOST}:${PORT} (slave ${SLAVE}, word ${HIGH_WORD_FIRST ? 'BE' : 'LE'})`);
+console.log(`[sim] senaryo=${scenario} -> ${HOST}:${PORT} (slave ${SLAVE}, word ${ORDER})`);
 
 let t0 = Date.now();
 
@@ -31,17 +35,14 @@ function setU16(img, addr, v) {
   img[addr] = v & 0xffff;
 }
 function setFloat(img, addr, value) {
-  const buf = Buffer.alloc(4);
-  buf.writeFloatBE(value, 0);
-  const hi = buf.readUInt16BE(0);
-  const lo = buf.readUInt16BE(2);
-  if (HIGH_WORD_FIRST) {
-    img[addr] = hi;
-    img[addr + 1] = lo;
-  } else {
-    img[addr] = lo;
-    img[addr + 1] = hi;
-  }
+  const t = Buffer.alloc(4);
+  t.writeFloatBE(value, 0); // gerçek IEEE bayt dizisi [t0,t1,t2,t3]
+  // Seçilen order ile "cihazın gönderdiği" ham baytları üret: raw[ord[i]] = t[i]
+  const ord = FLOAT_ORDERS[ORDER];
+  const raw = [0, 0, 0, 0];
+  for (let i = 0; i < 4; i++) raw[ord[i]] = t[i];
+  img[addr] = (raw[0] << 8) | raw[1];
+  img[addr + 1] = (raw[2] << 8) | raw[3];
 }
 function setStr(img, addr, str, byteLen) {
   const nReg = Math.ceil(byteLen / 2);

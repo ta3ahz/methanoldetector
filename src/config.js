@@ -27,9 +27,14 @@ const config = {
   // Modbus
   slaveId: num('MODBUS_SLAVE_ID', 1),
   pollIntervalMs: num('POLL_INTERVAL_MS', 5000),
-  // float32 word sırası: 'BE' (ABCD, üst word ilk) veya 'LE' (CDAB). Cihaza göre
-  // değerler saçma gelirse env ile 'LE' yapılıp denenir.
-  floatHighWordFirst: str('MODBUS_FLOAT_WORD_ORDER', 'BE').toUpperCase() !== 'LE',
+  // float32 bayt sırası. 'BE'=ABCD (standart), 'LE'=CDAB (word swap), ayrıca
+  // 'BADC'/'DCBA' desteklenir. Cihaza göre değerler saçma gelirse denenir.
+  floatOrder: (() => {
+    let o = str('MODBUS_FLOAT_WORD_ORDER', 'ABCD').toUpperCase();
+    if (o === 'BE') o = 'ABCD';
+    if (o === 'LE') o = 'CDAB';
+    return ['ABCD', 'CDAB', 'BADC', 'DCBA'].includes(o) ? o : 'ABCD';
+  })(),
   responseTimeoutMs: num('MODBUS_TIMEOUT_MS', 2000),
   commLossThreshold: num('COMM_LOSS_THRESHOLD', 3), // ardışık timeout sayısı
 

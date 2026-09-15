@@ -95,19 +95,27 @@ function decodeInt16(registers, off) {
   return v > 0x7fff ? v - 0x10000 : v;
 }
 
-// IEEE-754 float32, 2 register. highWordFirst=true => ABCD (ilk register üst word).
-// Cihaza göre word sırası değişebilir; commissioning'de env ile ters çevrilebilir.
-function decodeFloat32(registers, off, highWordFirst = true) {
-  const buf = Buffer.alloc(4);
-  const a = registers[off];
-  const b = registers[off + 1];
-  if (highWordFirst) {
-    buf.writeUInt16BE(a & 0xffff, 0);
-    buf.writeUInt16BE(b & 0xffff, 2);
-  } else {
-    buf.writeUInt16BE(b & 0xffff, 0);
-    buf.writeUInt16BE(a & 0xffff, 2);
-  }
+// IEEE-754 float32, 2 register. order: 4 baytın diziliş sırası.
+//   ABCD = big-endian, üst word ilk (Modbus standart)
+//   CDAB = word swap (düşük word ilk) — birçok cihaz böyle
+//   BADC = word içi bayt swap
+//   DCBA = tam ters
+// Geriye dönük: order === true => 'ABCD', false => 'CDAB'.
+const FLOAT_ORDERS = {
+  ABCD: [0, 1, 2, 3],
+  CDAB: [2, 3, 0, 1],
+  BADC: [1, 0, 3, 2],
+  DCBA: [3, 2, 1, 0],
+};
+
+function decodeFloat32(registers, off, order = 'ABCD') {
+  if (order === true) order = 'ABCD';
+  else if (order === false) order = 'CDAB';
+  const a = registers[off] & 0xffff;
+  const b = registers[off + 1] & 0xffff;
+  const raw = [a >> 8, a & 0xff, b >> 8, b & 0xff]; // cihazın gönderdiği bayt dizisi (ABCD)
+  const ord = FLOAT_ORDERS[order] || FLOAT_ORDERS.ABCD;
+  const buf = Buffer.from([raw[ord[0]], raw[ord[1]], raw[ord[2]], raw[ord[3]]]);
   return buf.readFloatBE(0);
 }
 
